@@ -1,0 +1,157 @@
+Deduper psuedocode
+Nikki Szczepanski
+
+Define the problem
+Write examples:
+Include a properly formatted input sam file
+Include a properly formatted expected output sam file
+Develop your algorithm using pseudocode
+Determine high level functions
+Description
+Function headers
+Test examples (for individual functions)
+Return statement
+
+THE PROBLEM:
+We want to write a "Reference-Based PCR Duplicate Removal" tool.
+So, given a sam file of uniquely mapped reads, the tool should remove all PCR duplicates,
+retaining only a single copy of each read (by default, the first read). 
+We also want to avoid loading everything into memory at once.
+
+A little more in depth:
+A PCR duplicate is an exact copy of a molecule of DNA, including its index and UMI. 
+These duplicates will necessarily be created due to our reliance on PCR to obtain a high enough concentration of reads
+that can be read on the sequencer.
+However, not all reads are PCR amplified at the same rate. For example, GC-rich sequences don't amplify as well as 
+their AT counterpart.
+Therefore, we have to do our best to remove this bias, which could lead to inaccurate expression analysis or inaccurate 
+genome assembly.
+There are 4 things we have to look out for when determining PCR duplicates. They must have the same:
+• starting position
+• chromosome
+• strand
+• UMI
+
+TO PREP THE SAM FILE:
+  Run `samtools sort` to sort the file by chromosome, position, and strand.
+
+THE PSUEDOCODE:	
+
+Strand function:
+  "Use the bitwise FLAG (Column 2) to get the strand info (fwd or rev comp) in relation to the reference."
+  
+  Cut out column 2. If it is 0, it is forward. If it is 16, it is reverse.
+  
+  	ex 1. 
+  	Input:
+  		NS500451:154:HWKTMBGXX:1:11101:24260:1121:CTGTTCAC	0	2	76814284	36	71M	*	0	0	\
+  		TCCACCACAATCTTACCATCCTTCCTCCAGACCACATCGCGTTCTTTGTTCAACTCACAGCTCAAGTACAA	\
+  		6AEEEEEEAEEAEEEEAAEEEEEEEEEAEEAEEAAEE<EEEEEEEEEAEEEEEEEAAEEAAAEAEEAEAE/	\
+  		MD:Z:71	NH:i:1	HI:i:1	NM:i:0	SM:i:36	XQ:i:40	X2:i:0	XO:Z:UU
+  	Return:
+  		strand = 0
+  		(where 0 means forward, and 1 means RC)
+  	ex 2. 
+  	Input:
+  		NS500451:154:HWKTMBGXX:1:11101:24260:1121:CTGTTCAC	16	2	76814284	36	71M	*	0	0	\
+  		TCCACCACAATCTTACCATCCTTCCTCCAGACCACATCGCGTTCTTTGTTCAACTCACAGCTCAAGTACAA	\
+  		6AEEEEEEAEEAEEEEAAEEEEEEEEEAEEAEEAAEE<EEEEEEEEEAEEEEEEEAAEEAAAEAEEAEAE/	\
+  		MD:Z:71	NH:i:1	HI:i:1	NM:i:0	SM:i:36	XQ:i:40	X2:i:0	XO:Z:UU
+  	Return:
+  		strd = 1
+  	
+Position function:
+  "Use the CIGAR string (Column 6), position (Column 4), and strand (see above function) to determine the starting position."
+  
+  If strand = 0 (aligned to the forward strand with respect to the reference):
+	Use the CIGAR string to adjust the position in Column 4. 
+	Use regular expressions to find the characters in the CIGAR string up until the first letter.
+	If the first letter is M, the starting position is simply the number in Column 4.
+	If the first letter is S, the starting position is the # in Col4 - the number in front of the S (store as variable pos).
+
+  If strand = 1 (aligned to the reverse strand WRT the reference):
+  	Add up all the numbers in the CIGAR string, starting from the before the first M. 
+  	(The idea is to not include numbers in front of S.)
+  	Add this sum to the position in Column 4 to get the starting position (store as variable pos).
+  
+  	ex 1. 
+  	Input:
+		NS500451:154:HWKTMBGXX:1:11101:24260:1121:CTGTTCAC	0	2	76814284	36	71M	*	0	0	\
+  		TCCACCACAATCTTACCATCCTTCCTCCAGACCACATCGCGTTCTTTGTTCAACTCACAGCTCAAGTACAA	\
+  		6AEEEEEEAEEAEEEEAAEEEEEEEEEAEEAEEAAEE<EEEEEEEEEAEEEEEEEAAEEAAAEAEEAEAE/	\
+  		MD:Z:71	NH:i:1	HI:i:1	NM:i:0	SM:i:36	XQ:i:40	X2:i:0	XO:Z:UU
+  	Return:
+  		pos = 76814284
+  	ex 2.
+  	Input:
+  		NS500451:154:HWKTMBGXX:1:11101:24260:1121:CTGTTCAC	0	2	76814284	36	2S69M	*	0	0	\
+  		TCCACCACAATCTTACCATCCTTCCTCCAGACCACATCGCGTTCTTTGTTCAACTCACAGCTCAAGTACAA	\
+  		6AEEEEEEAEEAEEEEAAEEEEEEEEEAEEAEEAAEE<EEEEEEEEEAEEEEEEEAAEEAAAEAEEAEAE/	\
+  		MD:Z:71	NH:i:1	HI:i:1	NM:i:0	SM:i:36	XQ:i:40	X2:i:0	XO:Z:UU
+  	Return:
+  		pos = 76814282
+  		(subtract the number in front of S from the position listed in Column 4)
+  	ex 3.
+  	Input:
+  		strand = 1,
+		NS500451:154:HWKTMBGXX:1:11101:69992:67325:AACGCCAT	16	2	76875967	36	1S14M470N55M1S	*	0	0	\
+		GTGGGATGAGGCGCTCTTTTATATTGAGTTGGGCTGTGCAGGAGTCTTTTCCCACTTCATTGACGGCGTAG	\
+		6<EEEEEEEEEEEEAEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE	\
+		MD:Z:71	NH:i:1	HI:i:1	NM:i:0	SM:i:36	XQ:i:40	X2:i:0	XO:Z:UU	XS:A:-	XG:Z:A
+  	Return:
+  		pos = 76876507
+  		(14+470+55+1=540, and 540+76875967=76876507)
+
+Chromosome function:
+  "Store the chromosome listed in Column 3 as the variable chr."
+  	ex. 
+  	Input:
+		NS500451:154:HWKTMBGXX:1:11101:24260:1121:CTGTTCAC	0	2	76814284	36	71M	*	0	0	\
+  		TCCACCACAATCTTACCATCCTTCCTCCAGACCACATCGCGTTCTTTGTTCAACTCACAGCTCAAGTACAA	\
+  		6AEEEEEEAEEAEEEEAAEEEEEEEEEAEEAEEAAEE<EEEEEEEEEAEEEEEEEAAEEAAAEAEEAEAE/	\
+  		MD:Z:71	NH:i:1	HI:i:1	NM:i:0	SM:i:36	XQ:i:40	X2:i:0	XO:Z:UU
+  	Return:
+  		chr = 2
+
+UMI function:
+  "Store the UMI listed at the end of the QNAME as the variable umi."
+  	ex. 
+  	Input:
+		NS500451:154:HWKTMBGXX:1:11101:24260:1121:CTGTTCAC	0	2	76814284	36	71M	*	0	0	\
+  		TCCACCACAATCTTACCATCCTTCCTCCAGACCACATCGCGTTCTTTGTTCAACTCACAGCTCAAGTACAA	\
+  		6AEEEEEEAEEAEEEEAAEEEEEEEEEAEEAEEAAEE<EEEEEEEEEAEEEEEEEAAEEAAAEAEEAEAE/	\
+  		MD:Z:71	NH:i:1	HI:i:1	NM:i:0	SM:i:36	XQ:i:40	X2:i:0	XO:Z:UU
+  	Return:
+  		umi = "CTGTTCAC"
+
+  	
+Main function:
+	"Store the 4 pieces of pertinent information from each read"
+	
+	Initialize a set (will be a set of lists called read_info). Note: Sets are unordered, but regarded as faster to look through.
+	Set variables current_chr and current_strd to 0.
+	Read in SAM file (single-end reads).
+	Read in list of UMIs.
+	
+	Read each line (skip all the @SQ lines until you reach NS#):
+		Use the Chromosome function to get the chromosome number.
+	
+		While chr is equal to current_chr:
+			-Use the Strand function to get the strand info.
+			-Once chr > current_chr, clear the set of lists (i.e. re-initialize) and add 1 to current_chr and re-read in line.
+			
+			 While strd is equal current_strd:	 
+			  	-Use the UMI function to store the UMi as the variable umi.
+				-If umi isn't in the list of 96, move on to next read.
+					•If it is, continue on to next steps. 
+				-Use the Position function to determine the starting position.
+				-Store the 4 important pieces of information into a list using the above functions:
+					• strand
+					• chromosome
+					• starting position
+					• UMI 
+				-Check if the set of 4 pieces of information is already present in the set read_info
+					•If it isn't, add this list to the set and write the entire read to the deduped.out file
+					•If it is, don't add to the set, and write the entire read to a file called pcr_dupes.out
+				-Once strd > current_strd, clear the set of lists (i.e. re-initialize) and add 1 to current_strd and re-read in line.
+	Once at the end of the file, return "Done!"
